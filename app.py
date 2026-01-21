@@ -1,149 +1,145 @@
-from dotenv import load_dotenv
-load_dotenv()
-
-import streamlit as st
-import psycopg2
 import os
+import psycopg2
 import pandas as pd
+import streamlit as st
 import plotly.express as px
-from datetime import datetime
 
-from analytics.queries import load_sales
-from analytics.metrics import compute_kpis
-
-# -------------------------------------------------
-# PAGE CONFIG
-# -------------------------------------------------
+# ----------------------------
+# PAGE CONFIG (MOBILE FRIENDLY)
+# ----------------------------
 st.set_page_config(
     page_title="Retail Analytics Dashboard",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    page_icon="📊",
+    layout="wide"
 )
 
-st.title("📊 Retail Analytics Dashboard")
+# ----------------------------
+# ENVIRONMENT VARIABLES
+# ----------------------------
+REQUIRED_VARS = ["PGHOST", "PGDATABASE", "PGUSER", "PGPASSWORD", "PGPORT"]
+missing = [v for v in REQUIRED_VARS if not os.getenv(v)]
 
-# -------------------------------------------------
-# ENVIRONMENT VARIABLES CHECK
-# -------------------------------------------------
-REQUIRED_ENV_VARS = ["PGHOST", "PGDATABASE", "PGUSER", "PGPASSWORD", "PGPORT"]
-missing_vars = [var for var in REQUIRED_ENV_VARS if not os.getenv(var)]
-if missing_vars:
-    st.error(f"Missing environment variables: {', '.join(missing_vars)}")
+if missing:
+    st.error(f"Missing environment variables: {', '.join(missing)}")
     st.stop()
 
-# -------------------------------------------------
-# DATABASE CONNECTION
-# -------------------------------------------------
+# ----------------------------
+# DATABASE CONNECTION (CACHED)
+# ----------------------------
+@st.cache_resource(show_spinner=False)
 def get_connection():
     return psycopg2.connect(
         host=os.getenv("PGHOST"),
         database=os.getenv("PGDATABASE"),
         user=os.getenv("PGUSER"),
         password=os.getenv("PGPASSWORD"),
-        port=int(os.getenv("PGPORT"))
+        port=os.getenv("PGPORT")
     )
 
-# -------------------------------------------------
-# SIDEBAR CONTROLS
-# -------------------------------------------------
-with st.sidebar:
-    st.header("⚙️ Dashboard Controls")
+# ----------------------------
+# DATA QUERIES (CACHED)
+# ----------------------------
+@st.cache_data(ttl=300, show_spinner=True)
+def load_sales_summary():
+    query = """
+        SELECT
+            DATE(s.sale_date) AS date,
+            SUM(s.quantity * p.price) AS revenue
+        FROM sales s
+        JOIN products p ON s.product_id = p.product_id
+        GROUP BY DATE(s.sale_date)
+        ORDER BY date;
+    """
+    return pd.read_sql(query, get_connection())
 
-    auto_refresh = st.toggle("🔄 Auto Refresh (5 mins)", value=False)
 
-    st.markdown("---")
-    st.header("🔎 Filters")
+@st.cache_data(ttl=300, show_spinner=True)
+def load_kpis():
+    query = """
+        SELECT
+            COUNT(*) AS total_sales,
+            SUM(s.quantity * p.price) AS total_revenue,
+            COUNT(DISTINCT s.customer_id) AS total_customers
+        FROM sales s
+        JOIN products p ON s.product_id = p.product_id;
+    """
+    return pd.read_sql(query, get_connection()).iloc[0]
 
-# -------------------------------------------------
-# AUTO REFRESH (SAFE FOR RAILWAY)
-# -------------------------------------------------
-if auto_refresh:
-    st.cache_data.clear()
-    st.rerun()
 
-# -------------------------------------------------
-# CACHED DATA LOADING
-# -------------------------------------------------
-@st.cache_data(ttl=300)  # 5 minutes
-def load_data():
-    conn = get_connection()
-    df = load_sales(conn)
-    conn.close()
-    return df, datetime.utcnow()
+@st.cache_data(ttl=300, show_spinner=True)
+def load_top_products():
+    query = """
+        SELECT
+            p.product_name,
+            SUM(s.quantity) AS units_sold
+        FROM sales s
+        JOIN products p ON s.product_id = p.product_id
+        GROUP BY p.product_name
+        ORDER BY units_sold DESC
+        LIMIT 5;
+    """
+    return pd.read_sql(query, get_connection())
 
-df, last_refresh = load_data()
-df["sale_date"] = pd.to_datetime(df["sale_date"]).dt.date
 
-# -------------------------------------------------
-# SIDEBAR FILTERS
-# -------------------------------------------------
-with st.sidebar:
-    min_date = df["sale_date"].min()
-    max_date = df["sale_date"].max()
+# ----------------------------
+# HEADER
+# ----------------------------
+st.title("📊 Retail Performance Dashboard")
+st.caption("Live analytics powered by PostgreSQL & Railway")
 
-    date_range = st.date_input(
-        "Date Range",
-        value=(min_date, max_date),
-        min_value=min_date,
-        max_value=max_date
-    )
+# ----------------------------
+# KPI SECTION (MOBILE STACKABLE)
+# ----------------------------
+kpis = load_kpis()
 
-    products = st.multiselect(
-        "Products",
-        sorted(df["product_name"].unique()),
-        default=sorted(df["product_name"].unique())
-    )
+kpi1, kpi2, kpi3 = st.columns(3)
 
-    customers = st.multiselect(
-        "Customers",
-        sorted(df["customer"].unique()),
-        default=sorted(df["customer"].unique())
-    )
+kpi1.metric("💰 Total Revenue", f"₦{kpis.total_revenue:,.0f}")
+kpi2.metric("🛒 Total Sales", int(kpis.total_sales))
+kpi3.metric("👥 Customers", int(kpis.total_customers))
 
-# -------------------------------------------------
-# APPLY FILTERS
-# -------------------------------------------------
-filtered_df = df[
-    (df["sale_date"] >= date_range[0]) &
-    (df["sale_date"] <= date_range[1]) &
-    (df["product_name"].isin(products)) &
-    (df["customer"].isin(customers))
-]
+st.divider()
 
-if filtered_df.empty:
-    st.warning("No data available for selected filters.")
-    st.stop()
+# ----------------------------
+# SALES TREND (RESPONSIVE)
+# ----------------------------
+sales_df = load_sales_summary()
 
-# -------------------------------------------------
-# LAST REFRESH INDICATOR
-# -------------------------------------------------
-st.caption(f"🕒 Last refreshed: {last_refresh.strftime('%Y-%m-%d %H:%M:%S')} UTC")
+fig_sales = px.line(
+    sales_df,
+    x="date",
+    y="revenue",
+    markers=True,
+    title="Revenue Over Time"
+)
 
-# -------------------------------------------------
-# KPIs
-# -------------------------------------------------
-kpis = compute_kpis(filtered_df)
+fig_sales.update_layout(
+    height=350,
+    margin=dict(l=20, r=20, t=40, b=20)
+)
 
-st.markdown("### 📌 Key Metrics")
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("💰 Total Revenue", f"₦{kpis['total_revenue']:,.0f}")
-c2.metric("🧾 Total Sales", kpis["total_sales"])
-c3.metric("📦 Avg Order Value", f"₦{kpis['avg_order_value']:,.0f}")
-c4.metric("👥 Unique Customers", kpis["unique_customers"])
+st.plotly_chart(fig_sales, use_container_width=True)
 
-# -------------------------------------------------
-# CHARTS (RESPONSIVE)
-# -------------------------------------------------
-st.markdown("### 📈 Revenue Over Time")
-daily_revenue = filtered_df.groupby("sale_date", as_index=False)["revenue"].sum()
-fig = px.line(daily_revenue, x="sale_date", y="revenue", markers=True)
-st.plotly_chart(fig, use_container_width=True)
+# ----------------------------
+# TOP PRODUCTS
+# ----------------------------
+top_products = load_top_products()
 
-st.markdown("### 🏆 Top Products")
-top_products = filtered_df.groupby("product_name", as_index=False)["revenue"].sum()
-fig2 = px.bar(top_products, x="product_name", y="revenue", text_auto=True)
-st.plotly_chart(fig2, use_container_width=True)
+fig_products = px.bar(
+    top_products,
+    x="product_name",
+    y="units_sold",
+    title="Top Selling Products"
+)
 
-st.markdown("### 👤 Customer Revenue")
-customer_rev = filtered_df.groupby("customer", as_index=False)["revenue"].sum()
-st.dataframe(customer_rev, use_container_width=True)
+fig_products.update_layout(
+    height=350,
+    margin=dict(l=20, r=20, t=40, b=20)
+)
+
+st.plotly_chart(fig_products, use_container_width=True)
+
+# ----------------------------
+# FOOTER
+# ----------------------------
+st.caption("Optimized for mobile • Cached for performance • Production-ready")
