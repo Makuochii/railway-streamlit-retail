@@ -89,7 +89,7 @@ def load_top_products():
 # HEADER
 # ----------------------------
 st.title("📊 Retail Performance Dashboard")
-st.caption("Live analytics powered by PostgreSQL & Railway")
+st.caption("Sample Live analytics powered by Makuochi using Python, PostgreSQL & Railway Cloud")
 
 # ----------------------------
 # KPI SECTION (MOBILE STACKABLE)
