@@ -59,7 +59,7 @@ with st.sidebar:
 # -------------------------------------------------
 if auto_refresh:
     st.cache_data.clear()
-    st.experimental_rerun()
+    st.rerun()
 
 # -------------------------------------------------
 # CACHED DATA LOADING
