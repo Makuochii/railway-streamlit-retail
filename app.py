@@ -9,12 +9,12 @@ import streamlit as st
 import plotly.express as px
 
 # ----------------------------
-# PAGE CONFIG (MOBILE FRIENDLY)
+# PAGE CONFIG
 # ----------------------------
 st.set_page_config(
-    page_title="Retail Analytics Dashboard",
+    page_title="Sample Retail Analytics Dashboard By Makuochi Using Python, PostgresSQL & Railway Cloud",
     page_icon="📊",
-    layout="wide"
+    layout="wide",
 )
 
 # ----------------------------
@@ -22,7 +22,6 @@ st.set_page_config(
 # ----------------------------
 REQUIRED_VARS = ["PGHOST", "PGDATABASE", "PGUSER", "PGPASSWORD", "PGPORT"]
 missing = [v for v in REQUIRED_VARS if not os.getenv(v)]
-
 if missing:
     st.error(f"Missing environment variables: {', '.join(missing)}")
     st.stop()
@@ -37,113 +36,113 @@ def get_connection():
         database=os.getenv("PGDATABASE"),
         user=os.getenv("PGUSER"),
         password=os.getenv("PGPASSWORD"),
-        port=os.getenv("PGPORT")
+        port=os.getenv("PGPORT"),
     )
 
 # ----------------------------
-# DATA QUERIES (CACHED)
+# AGGREGATED DATA (CACHED)
 # ----------------------------
-@st.cache_data(ttl=300, show_spinner=True)
-def load_sales_summary():
-    query = """
-        SELECT
-            DATE(s.sale_date) AS date,
-            SUM(s.quantity * p.price) AS revenue
-        FROM sales s
-        JOIN products p ON s.product_id = p.product_id
-        GROUP BY DATE(s.sale_date)
-        ORDER BY date;
-    """
-    return pd.read_sql(query, get_connection())
-
-
 @st.cache_data(ttl=300, show_spinner=True)
 def load_kpis():
     query = """
         SELECT
             COUNT(*) AS total_sales,
             SUM(s.quantity * p.price) AS total_revenue,
-            COUNT(DISTINCT s.customer_id) AS total_customers
+            COUNT(DISTINCT s.customer_id) AS total_customers,
+            COUNT(DISTINCT p.product_id) AS total_products
         FROM sales s
         JOIN products p ON s.product_id = p.product_id;
     """
     return pd.read_sql(query, get_connection()).iloc[0]
 
-
 @st.cache_data(ttl=300, show_spinner=True)
-def load_top_products():
-    query = """
+def load_top_products(limit=5):
+    query = f"""
         SELECT
             p.product_name,
-            SUM(s.quantity) AS units_sold
+            SUM(s.quantity) AS units_sold,
+            SUM(s.quantity * p.price) AS revenue
         FROM sales s
         JOIN products p ON s.product_id = p.product_id
         GROUP BY p.product_name
-        ORDER BY units_sold DESC
-        LIMIT 5;
+        ORDER BY revenue DESC
+        LIMIT {limit};
     """
     return pd.read_sql(query, get_connection())
 
+@st.cache_data(ttl=300, show_spinner=True)
+def load_top_customers(limit=5):
+    query = f"""
+        SELECT
+            c.name AS customer,
+            SUM(s.quantity * p.price) AS total_spent
+        FROM sales s
+        JOIN customers c ON s.customer_id = c.customer_id
+        JOIN products p ON s.product_id = p.product_id
+        GROUP BY c.name
+        ORDER BY total_spent DESC
+        LIMIT {limit};
+    """
+    return pd.read_sql(query, get_connection())
 
 # ----------------------------
 # HEADER
 # ----------------------------
-st.title("📊 Retail Performance Dashboard")
-st.caption("Sample Live analytics powered by Makuochi using Python, PostgreSQL & Railway Cloud")
+st.title("📊 Retail Aggregated Dashboard By Makuochi")
+st.caption("Aggregated KPIs with responsive charts • Cached for speed")
 
 # ----------------------------
-# KPI SECTION (MOBILE STACKABLE)
+# KPI CARDS (STACKABLE ON MOBILE)
 # ----------------------------
 kpis = load_kpis()
+col1, col2, col3, col4 = st.columns(4)
 
-kpi1, kpi2, kpi3 = st.columns(3)
-
-kpi1.metric("💰 Total Revenue", f"₦{kpis.total_revenue:,.0f}")
-kpi2.metric("🛒 Total Sales", int(kpis.total_sales))
-kpi3.metric("👥 Customers", int(kpis.total_customers))
+col1.metric("💰 Total Revenue", f"₦{kpis.total_revenue:,.0f}")
+col2.metric("🛒 Total Sales", int(kpis.total_sales))
+col3.metric("👥 Customers", int(kpis.total_customers))
+col4.metric("📦 Products", int(kpis.total_products))
 
 st.divider()
 
 # ----------------------------
-# SALES TREND (RESPONSIVE)
-# ----------------------------
-sales_df = load_sales_summary()
-
-fig_sales = px.line(
-    sales_df,
-    x="date",
-    y="revenue",
-    markers=True,
-    title="Revenue Over Time"
-)
-
-fig_sales.update_layout(
-    height=350,
-    margin=dict(l=20, r=20, t=40, b=20)
-)
-
-st.plotly_chart(fig_sales, width=True)
-
-# ----------------------------
-# TOP PRODUCTS
+# TOP PRODUCTS BAR CHART
 # ----------------------------
 top_products = load_top_products()
 
 fig_products = px.bar(
     top_products,
     x="product_name",
-    y="units_sold",
-    title="Top Selling Products"
+    y="revenue",
+    text="revenue",
+    title="Top Products by Revenue",
 )
-
+fig_products.update_traces(texttemplate="₦%{text:,.0f}", textposition="outside")
 fig_products.update_layout(
-    height=350,
-    margin=dict(l=20, r=20, t=40, b=20)
+    height=300,
+    margin=dict(l=20, r=20, t=40, b=20),
 )
-
 st.plotly_chart(fig_products, use_container_width=True)
+
+# ----------------------------
+# TOP CUSTOMERS BAR CHART
+# ----------------------------
+top_customers = load_top_customers()
+
+fig_customers = px.bar(
+    top_customers,
+    x="customer",
+    y="total_spent",
+    text="total_spent",
+    title="Top Customers by Spend",
+)
+fig_customers.update_traces(texttemplate="₦%{text:,.0f}", textposition="outside")
+fig_customers.update_layout(
+    height=300,
+    margin=dict(l=20, r=20, t=40, b=20),
+)
+st.plotly_chart(fig_customers, use_container_width=True)
 
 # ----------------------------
 # FOOTER
 # ----------------------------
-st.caption("Optimized for mobile • Cached for performance • Production-ready")
+st.caption("Optimized for mobile & desktop • Aggregations only • Fast-loading")
